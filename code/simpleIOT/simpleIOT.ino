@@ -12,18 +12,30 @@
 // EEPROM
 #include <EEPROM.h>
 
-// DS18B20 libraries
-#include <OneWire.h> 
-#include <DallasTemperature.h>
+#define DALLAS 0
+#define SHT 1
+
+#define SENSOR SHT
+
+#if SENSOR == DALLAS 
+  // DS18B20 libraries
+  #include <OneWire.h> 
+  #include <DallasTemperature.h>
+  // sensor settings
+  #define SENSOR_BUS D2               // the DS18B20 has the sensor connected to D2
+  OneWire oneWire(SENSOR_BUS);        // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs) 
+  DallasTemperature sensor(&oneWire); // Pass our oneWire reference to Dallas Temperature. 
+#else
+  // SHT
+  #include <Wire.h>
+  #include <Adafruit_SHT31.h>
+  Adafruit_SHT31 sht30 = Adafruit_SHT31();
+#endif  
 
 // ESP library
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 
-// sensor settings
-#define SENSOR_BUS D2               // the DS18B20 has the sensor connected to D2
-OneWire oneWire(SENSOR_BUS);        // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs) 
-DallasTemperature sensor(&oneWire); // Pass our oneWire reference to Dallas Temperature. 
 
 // wifi settings, set the AP to connect to
 #define AP_SSID ""
@@ -124,11 +136,11 @@ uint32_t hex2int(char *hex) {
 
 
 // send a HTTP Post to the backend, using the EXP protocol
-bool sendSensorData (uint32_t seconds, float temperature, String userId, String userKey, uint32_t devId) {
+bool sendSensorData (uint32_t seconds, float temperature, float humidity, String userId, String userKey, uint32_t devId) {
   Serial.println("sendSensorData " + String(seconds) + " " + String(temperature) + " " + userId + " device:" + String(devId, HEX));
   
   // prepare post data
-  String postUrl = String(ID_TIME_SECONDS) + "/" + String(seconds, DEC) + "/" + String(ID_VERSION_HW) + "/" + String(VER_HW, DEC) + "/" +  String(ID_VERSION_SW) + "/" + String(VER_SW, DEC) + "/" + String(ID_TEMPERATURE_CELSIUS) + "/" + String(temperature);
+  String postUrl = String(ID_TIME_SECONDS) + "/" + String(seconds, DEC) + "/" + String(ID_VERSION_HW) + "/" + String(VER_HW, DEC) + "/" +  String(ID_VERSION_SW) + "/" + String(VER_SW, DEC) + "/" + String(ID_TEMPERATURE_CELSIUS) + "/" + String(temperature) + "/" + String(ID_HUMIDITY_RH) + "/" + String(humidity);
   Serial.println(postUrl);
   // prepare http client to do the post
   HTTPClient http;
@@ -172,8 +184,20 @@ void setup() {
   EEPROM.begin(4); // init eeprom with size 4bytes
   deviceID = ((uint32_t) DEV_CLASS << 24) | ((uint32_t) eeprom_read_dword(EEPROM_ADDR_DEVID) & 0x00FFFFFF);
   Serial.println(String(deviceID, HEX));
-  
-  sensor.begin();                   // Start up the sensor library 
+
+  #if SENSOR == DALLAS
+    sensor.begin();                   // Start up the sensor library 
+  #else 
+  if (! sht30.begin(0x45)) {   // Set to 0x45 for alternate i2c addr
+    Serial.println("Couldn't find SHT31");
+   
+  } else {
+     float t = sht30.readTemperature();
+      float h = sht30.readHumidity();
+    Serial.printf("Sensor ok %f %f\n", t,h);
+  }
+  #endif
+    
   wifiConnect(AP_SSID, AP_KEY);
   
   Serial.println("Send interval:" + String(SEND_INTERVAL, DEC));
@@ -190,12 +214,19 @@ void loop() {
      
     // read temperature
     digitalWrite(LED_BUILTIN, LOW);   // Turn the LED on (Note that LOW is the voltage level  but actually the LED is on; this is because it is acive low on the ESP)
+
+    float temperature = 0 , humidity = 0;
+#if SENSOR == DALLAS
     sensor.requestTemperatures(); // Send the command to get temperature readings 
-    float temperature = sensor.getTempCByIndex(0);
+    temperature = sensor.getTempCByIndex(0);
+#else
+      temperature = sht30.readTemperature();
+      humidity = sht30.readHumidity();
+#endif    
     Serial.print("Temperature:"); Serial.println(temperature);
     
     // send temperature
-    sendSensorData(millis() / 1000, temperature, USER_ID, USER_KEY, deviceID);       
+    sendSensorData(millis() / 1000, temperature, humidity, USER_ID, USER_KEY, deviceID);       
     
     digitalWrite(LED_BUILTIN, HIGH);  // Turn the LED off by making the voltage HIGH
 
